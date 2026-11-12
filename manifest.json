@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "LocalWallet",
+  "version": "1.1.0",
+  "description": "Track balances of your money accounts in multiple currencies, with a snapshot history log. All data stays local.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": ["https://kurs.resenje.org/*"],
+  "action": { "default_title": "Open LocalWallet" },
+  "background": { "service_worker": "background.js" }
+}

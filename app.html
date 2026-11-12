@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LocalWallet</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>LocalWallet</h1>
+    <div class="actions">
+      <button id="export" class="ghost">Export JSON</button>
+      <label class="ghost button">Import JSON<input id="import" type="file" accept="application/json" hidden></label>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="section-head">
+        <h2>Accounts</h2>
+        <span id="saved-indicator" class="muted"></span>
+      </div>
+      <table id="accounts">
+        <thead>
+          <tr><th>Account</th><th>Currency</th><th class="num">Balance</th><th>Note</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <button id="add-row">+ Add account</button>
+
+      <h3>Totals</h3>
+      <div id="totals" class="chips"></div>
+      <div id="grand-total"></div>
+      <div class="rate-bar">
+        <button id="fetch-rates">Get NBS rates</button>
+        <span id="rates-info" class="muted"></span>
+      </div>
+
+      <div class="snapshot">
+        <input id="snapshot-note" placeholder="Optional note for this snapshot (e.g. “End of October”)">
+        <button id="save-snapshot" class="primary">Save to history</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>History</h2>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
