@@ -1,3 +1,7 @@
 .DS_Store
 # personal data: exports and the import file
 localwallet-*.json
+
+# extension signing key: keeps the extension ID stable, never commit
+key.pem
+*.pem

@@ -1,10 +1,15 @@
 {
   "manifest_version": 3,
   "name": "LocalWallet",
-  "version": "1.1.0",
-  "description": "Track balances of your money accounts in multiple currencies, with a snapshot history log. All data stays local.",
-  "permissions": ["storage", "unlimitedStorage"],
-  "host_permissions": ["https://kurs.resenje.org/*"],
+  "version": "1.2.0",
+  "description": "Track balances of your money accounts in multiple currencies, with a snapshot history log. Optionally syncs to your own Google Drive.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4Yf8rcSeeYPVfz22Eu/ynxeeD38HUu3li8MGmNEuLRtFKv5tocIAdixgwNnFWwu8ANwPJTMyM7xHt580aZm0ykuy8pFKbSCIBWgEp7Kno9hDtCJ6Srv3f4inOscU9Espcx97Co6quEH1CfinlaVITOZSNDkNk1GMGPjJnOq97S21lsHBg0fhYlZDF7RYwAapQbYQENgXncM+TmUxO7EJxx5tmxZdHdhUYZEw4OvmjB4hDwD4J2FV/CvjZxkIkr9cWYMwGA/fou+FSg0+aOQxjAgZ9L83t6JlLc+ocmLTmG9AThLP8SRjAxek27C6vub2v/k8VjPFojKBCKQ2ewLtBwIDAQAB",
+  "permissions": ["storage", "unlimitedStorage", "identity"],
+  "host_permissions": ["https://kurs.resenje.org/*", "https://www.googleapis.com/*"],
+  "oauth2": {
+    "client_id": "REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/drive.appdata"]
+  },
   "action": { "default_title": "Open LocalWallet" },
   "background": { "service_worker": "background.js" }
 }

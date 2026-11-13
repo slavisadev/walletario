@@ -1,7 +1,12 @@
 // LocalWallet — single-page account tracker with snapshot history.
-// State is kept in chrome.storage.local under a single key.
+// State is kept in chrome.storage.local under a single key and, when the user signs in
+// with Google, mirrored to a hidden file in their own Google Drive (appDataFolder).
 
 const STORAGE_KEY = "localwallet";
+const SYNC_KEY = "localwallet_sync"; // { enabled, fileId, email } — per device, never synced
+const DRIVE_FILE = "localwallet.json";
+const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
+const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 // Official NBS middle rates, served as JSON (NBS itself only offers a SOAP API that needs registration).
 const RATES_API = "https://kurs.resenje.org/api/v1/rates/";
 const NBS_URL = "https://www.nbs.rs/kursnaListaModul/srednjiKurs.faces?lang=lat";
@@ -29,12 +34,179 @@ let saveTimer;
 function persist(immediate = false) {
   clearTimeout(saveTimer);
   const write = async () => {
+    state.updatedAt = new Date().toISOString();
     await chrome.storage.local.set({ [STORAGE_KEY]: state });
     $("#saved-indicator").textContent = "Saved " + new Date().toLocaleTimeString();
+    scheduleUpload();
   };
   if (immediate) return write();
   $("#saved-indicator").textContent = "Saving…";
   saveTimer = setTimeout(write, 400);
+}
+
+// ---------- Google Drive sync ----------
+
+let sync = { enabled: false, fileId: null, email: null };
+let uploadTimer;
+let syncing = false;
+
+const clientIdMissing = () =>
+  (chrome.runtime.getManifest().oauth2?.client_id || "").startsWith("REPLACE_");
+
+function setSyncStatus(text, isError = false) {
+  const s = $("#sync-status");
+  s.textContent = text;
+  s.classList.toggle("warn", isError);
+}
+
+function renderSyncButton() {
+  $("#sync-btn").textContent = sync.enabled ? "Sign out" : "Sign in with Google";
+  if (!sync.enabled) setSyncStatus("Local only");
+}
+
+const saveSyncSettings = () => chrome.storage.local.set({ [SYNC_KEY]: sync });
+
+async function getToken(interactive) {
+  const res = await chrome.identity.getAuthToken({ interactive });
+  const token = typeof res === "string" ? res : res?.token;
+  if (!token) throw new Error("not signed in");
+  return token;
+}
+
+// fetch() against Google APIs with a bearer token; retries once with a fresh token on 401.
+async function gfetch(url, opts = {}, retry = true) {
+  const token = await getToken(false);
+  const res = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${token}` } });
+  if (res.status === 401 && retry) {
+    await chrome.identity.removeCachedAuthToken({ token });
+    return gfetch(url, opts, false);
+  }
+  if (!res.ok) throw new Error(`Google Drive answered HTTP ${res.status}`);
+  return res;
+}
+
+async function findDriveFile() {
+  const q = encodeURIComponent(`name='${DRIVE_FILE}'`);
+  const res = await gfetch(`${DRIVE_API}?spaces=appDataFolder&q=${q}&fields=files(id)`);
+  return (await res.json()).files?.[0]?.id || null;
+}
+
+async function createDriveFile(data) {
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify({ name: DRIVE_FILE, parents: ["appDataFolder"] })], { type: "application/json" }));
+  form.append("file", new Blob([JSON.stringify(data)], { type: "application/json" }));
+  const res = await gfetch(`${DRIVE_UPLOAD}?uploadType=multipart&fields=id`, { method: "POST", body: form });
+  return (await res.json()).id;
+}
+
+async function downloadDriveFile(id) {
+  return (await gfetch(`${DRIVE_API}/${id}?alt=media`)).json();
+}
+
+async function uploadDriveFile(id, data) {
+  await gfetch(`${DRIVE_UPLOAD}/${id}?uploadType=media`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+async function fetchEmail() {
+  try {
+    const res = await gfetch("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)");
+    return (await res.json()).user?.emailAddress || null;
+  } catch { return null; }
+}
+
+function scheduleUpload() {
+  if (!sync.enabled) return;
+  clearTimeout(uploadTimer);
+  setSyncStatus("Syncing…");
+  uploadTimer = setTimeout(pushToDrive, 1500);
+}
+
+async function pushToDrive() {
+  if (!sync.enabled) return;
+  if (syncing) return scheduleUpload(); // a sync is in flight; try again shortly
+  syncing = true;
+  try {
+    if (!sync.fileId) { sync.fileId = await createDriveFile(state); await saveSyncSettings(); }
+    else await uploadDriveFile(sync.fileId, state);
+    setSyncStatus(`Synced${sync.email ? " to " + sync.email : ""} · ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    setSyncStatus("Sync failed: " + e.message, true);
+  } finally {
+    syncing = false;
+  }
+}
+
+// Reconcile local state with the Drive copy: whichever was changed last wins.
+// `firstLink` is true right after signing in, when the user is asked before data is replaced.
+async function syncWithDrive({ firstLink = false } = {}) {
+  if (!sync.enabled || syncing) return;
+  syncing = true;
+  setSyncStatus("Syncing…");
+  try {
+    sync.fileId = (await findDriveFile()) || null;
+    if (!sync.fileId) {
+      sync.fileId = await createDriveFile(state);
+    } else {
+      const remote = await downloadDriveFile(sync.fileId);
+      const remoteNewer = (remote.updatedAt || "") > (state.updatedAt || "");
+      let useRemote = remoteNewer;
+      if (firstLink && Array.isArray(remote.accounts)) {
+        useRemote = confirm(
+          "This Google account already has LocalWallet data" +
+          (remote.updatedAt ? ` (last changed ${new Date(remote.updatedAt).toLocaleString()})` : "") +
+          ".\n\nOK: use the data from Google Drive (replaces what's on this device).\n" +
+          "Cancel: keep this device's data and upload it to Google Drive.");
+      }
+      if (useRemote && Array.isArray(remote.accounts)) {
+        state = { rates: null, ...remote };
+        editing = null;
+        await chrome.storage.local.set({ [STORAGE_KEY]: state });
+        renderAll();
+      } else if (firstLink || (state.updatedAt || "") > (remote.updatedAt || "")) {
+        await uploadDriveFile(sync.fileId, state);
+      }
+    }
+    await saveSyncSettings();
+    setSyncStatus(`Synced${sync.email ? " to " + sync.email : ""} · ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    setSyncStatus("Sync failed: " + e.message, true);
+  } finally {
+    syncing = false;
+  }
+}
+
+async function signIn() {
+  if (clientIdMissing()) {
+    alert("Google sign-in isn't configured yet: put your OAuth client ID into manifest.json (see README).");
+    return;
+  }
+  try {
+    await getToken(true);
+  } catch (e) {
+    setSyncStatus("Sign-in failed: " + e.message, true);
+    return;
+  }
+  sync = { enabled: true, fileId: null, email: await fetchEmail() };
+  await saveSyncSettings();
+  renderSyncButton();
+  await syncWithDrive({ firstLink: true });
+}
+
+async function signOut() {
+  if (!confirm("Stop syncing with Google Drive? Your data stays on this device and in Drive.")) return;
+  clearTimeout(uploadTimer);
+  try {
+    const token = await getToken(false);
+    await chrome.identity.removeCachedAuthToken({ token });
+    fetch("https://oauth2.googleapis.com/revoke?token=" + token, { method: "POST" }).catch(() => {});
+  } catch { /* already signed out */ }
+  sync = { enabled: false, fileId: null, email: null };
+  await saveSyncSettings();
+  renderSyncButton();
 }
 
 // ---------- helpers ----------
@@ -471,7 +643,16 @@ $("#import").addEventListener("change", (e) => {
   e.target.value = "";
 });
 
-load().then(() => {
+$("#sync-btn").addEventListener("click", () => (sync.enabled ? signOut() : signIn()));
+// Pick up changes made on another device when this tab comes back into view.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && !editing) syncWithDrive();
+});
+
+load().then(async () => {
   renderAll();
+  sync = (await chrome.storage.local.get(SYNC_KEY))[SYNC_KEY] || sync;
+  renderSyncButton();
+  await syncWithDrive();
   if (!ratesAreFresh()) refreshRates({ silent: true }); // rates refresh once per day automatically
 });
